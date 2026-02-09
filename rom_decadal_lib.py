@@ -1,4 +1,6 @@
 import matplotlib.pyplot as plt
+import numpy as np
+import xarray as xr
 
 plt.figure()
 plt.rcParams.update({'font.size':16}) # Set up some defaults for all my figures
