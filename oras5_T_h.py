@@ -46,7 +46,7 @@ if __name__ == '__main__':
     weights = ~np.isnan(equator)
     weights = weights*np.cos(np.deg2rad(weights.nav_lat))
 
-    ds = xr.Dataset({'tos':sst,'z20':z20})
+    ds = xr.Dataset({'tos':sst,'z20':z20}).rename({'time_counter':'time'})
 
     eq_ave = average_pacific_region(ds.where(np.abs(sst.nav_lat.load())<5,drop=True),
                            weights,np.array((0,360,-5,5)),'nav_lon','nav_lat',('y',))
