@@ -1,6 +1,10 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
+import os
+import warnings
+import copy
+
 
 plt.figure()
 plt.rcParams.update({'font.size':16}) # Set up some defaults for all my figures
@@ -21,20 +25,21 @@ def calc_BWJ(y,dy):
     y = y.transpose(..., 'time', 'v')
     dy = dy.transpose(..., 'time', 'v')
     
-    A = np.linalg.lstsq(y.data,
-                        dy.data, 
-                        rcond=None
-                       )[0]
+    A = xr.apply_ufunc(lambda y, dy: np.linalg.lstsq(y,dy,rcond=None)[0],
+                       y,
+                       dy,
+                       input_core_dims=[('time','v')]*2,
+                       output_core_dims=[('v1','v2')],
+                       vectorize=True,
+                      )
     
     eigs = np.linalg.eigvals(A)[...,0]
-    #print(eigs)
     
     out_dims = None
     out_coords = None
-    if len(y.dims[:-2])>0:
-        out_dims = y.dims[:-2]
-        out_coords = y.coords.copy
-        out_coords=out_coords.pop('time').pop('v')
+    if len(A.dims[:-2])>0:
+        out_dims = A.dims[:-2]
+        out_coords = A.coords
     
     return xr.DataArray(eigs,
                         name='BWJ',
@@ -129,3 +134,22 @@ def pseudo_run( data_origin,
 
     # save pseudo data
     out.to_netcdf(out_filename)
+    
+def plot_edge_only_histogram(data, bins=10, edge_color='black',weights=None,density=False,linestyle='solid',linewidth=1):
+    """
+    Courtesy of ChatGPT (and some people on stack-overflow, I kinda had to walk chatgpt through it)
+    Plots a histogram showing only the outer edges of the bars without any fills.
+    
+    Parameters:
+        data (array-like): The input data for the histogram.
+        bins (int): The number of bins for the histogram.
+        edge_color (str): The color of the edges.
+    """
+    # Create the histogram
+    counts, bin_edges = np.histogram(data, bins=bins,weights=weights,density=density)
+    
+    x_edges = np.concatenate(([bin_edges[0]], bin_edges[:-1], [bin_edges[-1]]))
+    y_counts = np.concatenate(([0], counts, [0]))
+
+    # Use step to create the outer edges
+    plt.step(x_edges, y_counts, where='post', color=edge_color,linestyle=linestyle,linewidth=linewidth)
