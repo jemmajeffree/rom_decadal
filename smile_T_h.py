@@ -33,7 +33,7 @@ if __name__ == '__main__':
     MMLEA_dir = '/g/data/su28/MMLEAv2/ocean/monthly/{var}/'
     filepaths = {'ACCESS-ESM1-5':'ACCESS-ESM1-5/{var}_Omon_ACCESS-ESM1-5_historical_r{M}i1p1f1_g025_185001-201412.nc',
                 'CESM1-CAM5':'CESM1-CAM5/{var}_Omon_CESM1-CAM5_historical_rcp85_r{M}i1p1_g025_192001-210012.nc',
-                #'CESM2':'CESM2/{var}_Omon_CESM2_cmip6_historical_ssp370_{M}i1p1f1_g025_185001-210012.nc', # Some filename stuff needs sorting out
+                'CESM2':'CESM2/{var}_Omon_CESM2_cmip6_historical_ssp370_{M}i1p1f1_g025_185001-210012.nc', # Some filename stuff needs sorting out
                 'CanESM5':'CanESM5/{var}_Omon_CanESM5_historical_r{M}i1p2f1_g025_185001-201412.nc',
                 'EC-Earth3':'EC-Earth3/{var}_Omon_EC-Earth3_historical_r{M}i1p1f1_g025_185001-201412.nc',
                 'IPSL-CM6A-LR':'IPSL-CM6A-LR/{var}_Omon_IPSL-CM6A-LR_historical_r{M}i1p1f1_g025_185001-201412.nc',
@@ -62,14 +62,15 @@ if __name__ == '__main__':
             regex = re.compile(filepaths[model].format(var=var,M='(.*)'))
             ensemble_members[var] = regex.findall('\n'.join(matching_paths))
     
-            # if model == 'CESM2':
-            #     # Minor quirk of the way files seem to be named
-            #     ensemble_members[var] = [m.replace('r','') for m in ensemble_members[var]]
-    
         # Throw out any where we don't have both tos and z20
         shared_ensemble_members = [m for m in ensemble_members[variables[0]] 
                                    if m in ensemble_members[variables[1]]
                                   ] # List comprehension is eldrich
+
+        if model == 'CESM2':
+            # Minor quirk of the way files seem to be named, which I'm unfortunately not in a position to fix
+            shared_ensemble_members = ensemble_members['tos'] 
+    
         argsort = np.argsort(np.array(shared_ensemble_members,float))
         shared_ensemble_members = np.array(shared_ensemble_members)[argsort]
     
@@ -77,6 +78,13 @@ if __name__ == '__main__':
             [(MMLEA_dir+filepaths[model]).format(var=var,M=m) 
              for m in shared_ensemble_members]
             for var in variables]
+
+        if model == 'CESM2':
+            add_r = {'z20':'r','tos':''}
+            shared_filepaths = [
+                                [(MMLEA_dir+filepaths[model]).format(var=var,M=add_r[var]+m) 
+                                 for m in shared_ensemble_members]
+                                for var in variables]
 
         # Okay, now we can actually open the data
         
@@ -94,7 +102,10 @@ if __name__ == '__main__':
         ds.to_netcdf(out_dir+model+'_SMILE_eq-ave.nc') # May as well save that
 
         # Then, average again to get the specific indices I actually want to use
-        is_ocean = ~np.isnan(xr.open_mfdataset(shared_filepaths[0][0]).isel(time=0).load())
+        if model == 'CESM2':
+            is_ocean = xr.Dataset({'tos':~np.isnan(xr.open_mfdataset(shared_filepaths[0][0]).tos.isel(time=0).load())}) # yeah, I'm not happy about the shifting of types either but I think it's the least worst choice in this situation
+        else:
+            is_ocean = ~np.isnan(xr.open_mfdataset(shared_filepaths[0][0]).isel(time=0).load())
         weight = average_equatorial_band_regridded(is_ocean).tos
         
         indices = {}
