@@ -118,5 +118,8 @@ if __name__ == '__main__':
         indices['h_w'] = average_index_regridded(ds.z20,weight,slice(120,205)) # Izumo2019
 
         # Save that
-        xr.Dataset(indices).to_netcdf(out_dir+model+'_SMILE_indices.nc')                         
+        out = xr.Dataset(indices)
+        if model == 'CESM2': # again. C'mon
+            out = out.squeeze().drop_vars('z_t')
+        out.to_netcdf(out_dir+model+'_SMILE_indices.nc')                         
     
