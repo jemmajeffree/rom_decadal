@@ -83,8 +83,129 @@ class basic_ROM:
         
         return out_xr.transpose(*orig_dims)
     
+class quadT_ROM:
+    
+    def __init__(self, A=None, sigma=None):
+        ''' Just in case I ever feel like overwriting these instead of fitting. 
+        Can't see it happening, tbh, but it's good to have versatile code'''
+        
+        self.A = A # A is a numpy array of shape (2,3), BUT A[1,2] = 0 because h is not dependent on T^2
+        self.sigma = sigma
+    
+    def fit(self, y0, dy):
+        
+        y0 = y0.transpose(..., 'time', 'v')
+        dy = dy.transpose(..., 'time', 'v')
+        
+        # nonlinear bit for T
+        xT, res2T, *_ = np.linalg.lstsq(xr.concat((y0,y0.sel(v=np.array('T'))**2),dim='v'),
+                                      dy.sel(v='T').data, 
+                                      rcond=None,
+                                      )
+
+        # linear bit for h
+        xh, res2h, *_ = np.linalg.lstsq(y0.data, 
+                                      dy.sel(v='h').data, 
+                                      rcond=None)
+        
+        self.A = np.zeros((2,3))
+        self.A[0] = xT
+        self.A[1,:2] = xh
+        
+        self.sigma = np.concatenate(((res2T/y0.time.shape[0])**0.5,(res2h/y0.time.shape[0])**0.5))
+            
+    def ddt_xr(self, y0):
+        
+        # Do a bunch of dimension management
+        orig_dims = copy.copy(y0.dims)
+        y0 = y0.transpose(..., 'v')
+        out_xr = xr.zeros_like(y0)
+        
+        # Prep for linalg
+        y0 = xr.concat((y0,y0.sel(v='T')**2),'v')
+        y0 = y0.expand_dims('spare_dim',-1) # So that v is _always_ n-1
+        
+        out_xr[:] = np.squeeze(self.A@y0.data + # predictable bit
+                              np.random.normal(0, # noise
+                                               np.expand_dims(self.sigma,-1), # to match the other expanded dim
+                                                y0.isel(v=slice(None,2)).shape),
+                            -1,
+                            )
+        
+        return out_xr.transpose(*orig_dims)
+    
+class lookup_table_ROM:
+    def __init__(self, A=None, gridded_tendency = None, sigma=None):
+        ''' Just in case I ever feel like overwriting these instead of fitting. 
+        Can't see it happening, tbh, but it's good to have versatile code'''
+        
+        self.A = A # backup linear matrix
+        self.gridded_tendency = gridded_tendency # lookup table
+        self.sigma = sigma # error (T, h)
+    
+    def fit(self, y0, dy, count_threshold=5):
+        
+        y0 = y0.transpose(..., 'time', 'v')
+        dy = dy.transpose(..., 'time', 'v')
+        assert len(y0.shape)==2, "Look, sorry, but I'm not coding this to handle more dimensions"
+        
+        # First, get a linear fit to use as a backup when the ROM leaves the area we can get an empirical fit
+        x, res2, *_ = np.linalg.lstsq(y0.data, dy.data, rcond=None)
+        self.A = x.T
+        
+        # Now we build the lookup-table and fill it in. Going to 8 sigma with spacing of 0.5 std
+        # define edges of bins
+        h_bins = np.linspace(-8,8,8*4+1)
+        T_bins = np.linspace(-8,8,8*4+1) # We have problems if we ever get an ENSO event > 8σ
+        std = y0.std('time') # scaling factor to fit stuff in the box
+        assert np.all(np.abs(y0)<8*std) # everything had better be less than 8 std
+        
+        h_bins = h_bins*float(std.sel(v='h'))
+        T_bins = T_bins*float(std.sel(v='T'))
+        
+        # define empty lookup table
+        gridded_tendency = np.zeros((2,T_bins.shape[0]-1,h_bins.shape[0]-1))
+        variance = np.zeros((2,T_bins.shape[0]-1,h_bins.shape[0]-1))
+        bin_count = np.zeros((T_bins.shape[0]-1,h_bins.shape[0]-1))
+        
+        for hi,h in enumerate(h_bins[:-1]):
+            for Ti,T in enumerate(T_bins[:-1]):
+                relevant_data = dy.where((y0.sel(v='h')>=h_bins[hi]) &
+                                               (y0.sel(v='h')<h_bins[hi+1]) &
+                                               (y0.sel(v='T')>=T_bins[Ti]) &
+                                               (y0.sel(v='T')<T_bins[Ti+1])
+                                              )
+                bin_count[Ti,hi] = np.sum(~np.isnan(relevant_data))
+                
+                if bin_count[Ti,hi]>=count_threshold:
+                    gridded_tendency[:,Ti,hi] = relevant_data.mean('time')
+                    variance[:,Ti,hi] = relevant_data.var('time',ddof=0) # Technically this should be ddof=1, but I really can't be bothered explaining statistics to people who should know better and it doesn't meaningfully affect the results
+                else:
+                    mean_T = (T_bins[Ti]+T_bins[Ti+1])/2
+                    mean_h = (h_bins[hi]+h_bins[hi+1])/2
+                    gridded_tendency[:,Ti,hi] = self.A@np.array((mean_T,mean_h))
+                
+        self.sigma = (np.sum(variance*bin_count,axis=(1,2)) # Again, I think if we were doing this really properly we'd weight by bin_count minus 1
+                      /np.sum(bin_count,axis=(0,1)))**0.5
+        
+        self.gridded_tendency = xr.DataArray(gridded_tendency,dims=('v','T','h'),
+                                           coords={'T':(T_bins[:-1]+T_bins[1:])/2,'h':(h_bins[:-1]+h_bins[1:])/2})
+
+            
+    def ddt_xr(self, y0):
+        
+        # Do a bunch of dimension management
+        orig_dims = copy.copy(y0.dims)
+        y0 = y0.transpose(..., 'v')
+        
+        return (self.gridded_tendency.sel(T=y0.sel(v='T'),h=y0.sel(v='h'),method='nearest').transpose(..., 'v') # predictable bit
+                +np.random.normal(0,self.sigma,y0.isel(v=slice(None,2)).shape) # noise
+                ).transpose(*orig_dims)
+    
 rom_dict = {}
 rom_dict['linear_2D'] = basic_ROM
+rom_dict['lookup_table'] = lookup_table_ROM
+rom_dict['quadT'] = quadT_ROM
 
 def pseudo_run( data_origin,
                 T_variable,
@@ -123,7 +244,9 @@ def pseudo_run( data_origin,
     # array to put pseudo data into
     out = xr.DataArray(
         np.ones(members+(run_len,)+(2,)),
-        dims=tuple('M'+str(i) for i in range(len(members)))+('time','v')
+        dims=tuple('M'+str(i) for i in range(len(members)))+('time','v'),
+        name = 'pseudo_run',
+        coords = {'v':np.array(('T','h'))},
                          )
 
     # for loop through _time_ only, 
