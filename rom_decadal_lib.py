@@ -18,6 +18,7 @@ WKC = '#f6a895'
 def declim(x):
     return x.groupby('time.month')-x.groupby('time.month').mean()
 
+
 def calc_BWJ(y,dy):
     ''' Calculate the Bjerknes-Wyrtki-Jin index
     (complex number Bj + i*Wk )
@@ -204,8 +205,53 @@ class lookup_table_ROM:
     
 rom_dict = {}
 rom_dict['linear_2D'] = basic_ROM
-rom_dict['lookup_table'] = lookup_table_ROM
 rom_dict['quadT'] = quadT_ROM
+rom_dict['lookup_table'] = lookup_table_ROM
+
+
+def decimal_year(t):
+    ''' Turns date into a number that can be used for detrending. May be off by 1/366 in Gregorian calendars, but 
+    I think that's well within the margin of error'''
+    
+    return t['time.year']+t['time.dayofyear']/365
+
+def detrend_ensemble_mean(y):
+    ''' Simple "remove forced signal" via ensemble mean. Seems to produce
+    a couple spurious non-oscillatory decades, and can't work on obs, so I'm
+    using the quadratic instead'''
+    
+    assert 'M' in y.dims, 'Not gonna work without multiple ensemble members'
+    return y-y.mean('M')
+
+def declim_detrend_quadratic(y):
+    ''' Remove the climate change signal in obs or a SMILE
+    by removing the seasonal cycle and then fitting and subtracting
+    a quadratic.
+    Currently assumes that you have a semi-reasonable time unit, so 
+    works best with decode_times=False'''
+    # strip seasonal cycle
+    y = declim(y) 
+    
+    # grab old time coordinates to put back later
+    old_time_coords = y.time.copy() 
+    
+    # then put nice easy coordinates on
+    # new_time_coords = (y.time-np.datetime64('1900-01-01'))/np.timedelta64(1,'D')
+    new_time_coords = decimal_year(y.time)
+    y = y.assign_coords({'time':new_time_coords}) 
+    
+    # Get polynomial coefficients
+    if 'M' in y.dims:
+        fit_curve = y.mean('M')
+    else:
+        fit_curve = y
+    fit = fit_curve.polyfit(dim='time',deg=2).polyfit_coefficients
+    
+    return (y-                 # original minus
+            (y.time**2*fit[0]+ # quadratic
+              y.time*fit[1]+   # linear
+              fit[2])          # constant
+           ).assign_coords({'time':old_time_coords})
 
 def pseudo_run( data_origin,
                 T_variable,
@@ -214,8 +260,10 @@ def pseudo_run( data_origin,
                 shape_name = '', # If you change anything below here, change shape_name
                 inits = None,
                 data_isel = {'time':slice(120,None)},
+                data_labelsel = {},
                 run_len = 3600,
                 members = (40,),
+                detrend = declim,
                 ):
 
     # figure out file naming
@@ -224,9 +272,9 @@ def pseudo_run( data_origin,
         warnings.warn('overwriting '+out_filename)
 
     # load indices
-    indices = xr.open_dataset('indices/'+data_origin+'_indices.nc').isel(data_isel)
-    T = declim(indices[T_variable])
-    h = declim(indices[h_variable])
+    indices = xr.open_dataset('indices/'+data_origin+'_indices.nc').isel(data_isel).sel(data_labelsel)
+    T = detrend(indices[T_variable])
+    h = detrend(indices[h_variable])
 
     full_y = xr.concat((T,h),dim='v').assign_coords({'v':np.array(('T','h'))})
     full_dy = full_y.diff('time',label='lower') # this is the dy at the time it starts from
@@ -257,6 +305,7 @@ def pseudo_run( data_origin,
 
     # save pseudo data
     out.to_netcdf(out_filename)
+    indices.close()
     
 def plot_edge_only_histogram(data, bins=10, edge_color='black',weights=None,density=False,linestyle='solid',linewidth=1):
     """
