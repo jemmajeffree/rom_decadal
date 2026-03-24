@@ -70,6 +70,10 @@ if __name__ == '__main__':
         if model == 'CESM2':
             # Minor quirk of the way files seem to be named, which I'm unfortunately not in a position to fix
             shared_ensemble_members = ensemble_members['tos'] 
+        elif model == 'EC-Earth3':
+            shared_ensemble_members = [m for m in ensemble_members[variables[0]] 
+                                   if m+'1' in ensemble_members[variables[1]] # I dunno how this happened, but the ensemble member naming is off
+                                  ]
     
         argsort = np.argsort(np.array(shared_ensemble_members,float))
         shared_ensemble_members = np.array(shared_ensemble_members)[argsort]
@@ -83,6 +87,12 @@ if __name__ == '__main__':
             add_r = {'z20':'r','tos':''}
             shared_filepaths = [
                                 [(MMLEA_dir+filepaths[model]).format(var=var,M=add_r[var]+m) 
+                                 for m in shared_ensemble_members]
+                                for var in variables]
+        elif model == 'EC-Earth3':
+            add_1 = {'z20':'1','tos':''}
+            shared_filepaths = [
+                                [(MMLEA_dir+filepaths[model]).format(var=var,M=m+add_1[var]) 
                                  for m in shared_ensemble_members]
                                 for var in variables]
 
