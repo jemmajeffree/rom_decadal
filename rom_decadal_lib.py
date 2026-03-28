@@ -307,6 +307,8 @@ def pseudo_run( data_origin,
     out.to_netcdf(out_filename)
     indices.close()
     
+    return rom
+    
 def plot_edge_only_histogram(data, bins=10, edge_color='black',weights=None,density=False,linestyle='solid',linewidth=1):
     """
     Courtesy of ChatGPT (and some people on stack-overflow, I kinda had to walk chatgpt through it)
